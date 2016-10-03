@@ -15,6 +15,42 @@ type wav struct {
 	store map[string]string
 }
 
+// newWav creates a new Getter that can return properties for WAV files.
+// Note that the "RIFF" chunk identifier has already been read
+// by the time this function is called.
+func newWav(r io.Reader) (Getter, error) {
+	getter := wav{
+		store: map[string]string{},
+	}
+
+	// Get the length.
+	if err := binary.Read(r, binary.LittleEndian, &getter.length); err != nil {
+		return nil, err
+	}
+
+	// Sniff the format.
+	if err := getter.expectChunkID(r, "WAVE"); err != nil {
+		return nil, err
+	}
+
+	// Read the fmt subchunk.
+	if err := getter.readFormat(r); err != nil {
+		return nil, err
+	}
+
+	// Read the data subchunk.
+	if err := getter.readData(r); err != nil {
+		return nil, err
+	}
+
+	// Read extra subchunks.
+	if err := getter.readExtra(r); err != nil {
+		return nil, err
+	}
+
+	return getter, nil
+}
+
 // Get returns the tag specified by key.
 // If the tag doesn't exist an error is returned.
 func (w wav) Get(key string) (string, error) {
@@ -143,28 +179,46 @@ func (w wav) readInt32(r io.Reader, prop string) error {
 	return nil
 }
 
-// newWav creates a new Getter that can return properties for WAV files.
-// Note that the "RIFF" chunk identifier has already been read
-// by the time this function is called.
-func newWav(r io.Reader) (Getter, error) {
-	getter := wav{
-		store: map[string]string{},
+// readData reads the data subchunk.
+func (w wav) readData(r io.Reader) error {
+	// Read the chunk ID.
+	if err := w.expectChunkID(r, "data"); err != nil {
+		return err
 	}
 
-	// Get the length.
-	if err := binary.Read(r, binary.LittleEndian, &getter.length); err != nil {
-		return nil, err
+	// Read the chunk length.
+	var length int32
+	if err := binary.Read(r, binary.LittleEndian, &length); err != nil {
+		return err
 	}
 
-	// Sniff the format.
-	if err := getter.expectChunkID(r, "WAVE"); err != nil {
-		return nil, err
+	// Fast forward past all the audio data.
+	buf := make([]byte, 4096)
+	for length > 4096 {
+		bytesRead, err := r.Read(buf)
+		if err != nil {
+			return err
+		}
+		if expected, got := 4096, bytesRead; expected != got {
+			return fmt.Errorf("expected to read %d bytes, actually read %d", expected, got)
+		}
+		length -= 4096
+	}
+	if length > 0 {
+		buf = make([]byte, length)
+		bytesRead, err := r.Read(buf)
+		if err != nil {
+			return err
+		}
+		if expected, got := int(length), bytesRead; expected != got {
+			return fmt.Errorf("expected to read %d bytes, actually read %d", expected, got)
+		}
 	}
 
-	// Read the fmt chunk.
-	if err := getter.readFormat(r); err != nil {
-		return nil, err
-	}
+	return nil
+}
 
-	return getter, nil
+// readExtra reads extra subchunks.
+func (w wav) readExtra(r io.Reader) error {
+	return w.expectChunkID(r, "LIST")
 }

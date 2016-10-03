@@ -33,21 +33,34 @@ func NewGetter(r io.Reader) (Getter, error) {
 		// TODO: handle id3
 		return newID3(r)
 	case "RIF":
-		// Read one more byte for RIFF type.
-		headerLastByte := make([]byte, 1)
-
-		bytesRead, err := r.Read(headerLastByte)
-		if err != nil {
+		if err := checkRIFFLastByte(r, header); err != nil {
 			return nil, err
 		}
-		if expected, got := 1, bytesRead; expected != got {
-			return nil, fmt.Errorf("expected to read %d bytes, actually read %d", expected, got)
-		}
 
-		if headerLastByte[0] != 'F' {
-			hdr := string(append(header, headerLastByte...))
-			return nil, fmt.Errorf("expected RIFF, got %s", hdr)
+		getter, err := newWav(r)
+		if err != nil && err != io.EOF {
+			return nil, err
 		}
-		return newWav(r)
+		return getter, nil
 	}
+}
+
+// checkRIFFLastByte checks that the 4th byte of a RIFF file is 'F'.
+func checkRIFFLastByte(r io.Reader, header []byte) error {
+	// Read one more byte for RIFF type.
+	headerLastByte := make([]byte, 1)
+
+	bytesRead, err := r.Read(headerLastByte)
+	if err != nil {
+		return err
+	}
+	if expected, got := 1, bytesRead; expected != got {
+		return fmt.Errorf("expected to read %d bytes, actually read %d", expected, got)
+	}
+
+	if headerLastByte[0] != 'F' {
+		hdr := string(append(header, headerLastByte...))
+		return fmt.Errorf("expected RIFF, got %s", hdr)
+	}
+	return nil
 }

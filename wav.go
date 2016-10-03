@@ -25,28 +25,37 @@ func (w wav) Get(key string) (string, error) {
 	return v, nil
 }
 
-// sniffFormat reads the format bytes from an io.Reader and returns
-// an error if they aren't "WAVE".
-func (w wav) sniffFormat(r io.Reader) error {
-	format := make([]byte, 4)
-	bytesRead, err := r.Read(format)
+// expectChunkID reads a chunk ID from an io.Reader and checks it
+// against an expected value.
+func (w wav) expectChunkID(r io.Reader, expected string) error {
+	chunkID, err := w.readChunkID(r)
 	if err != nil {
 		return err
 	}
-	if expected, got := 4, bytesRead; expected != got {
-		return fmt.Errorf("expected to read %d bytes, actually read %d", expected, got)
-	}
-	if expected, got := "WAVE", string(format); expected != got {
-		return fmt.Errorf("expected format %s, got %s", expected, got)
+	if expected != string(chunkID) {
+		return fmt.Errorf("expected chunk ID %s, got %s", expected, chunkID)
 	}
 	return nil
+}
+
+// readChunkID reads a chunk ID.
+func (w wav) readChunkID(r io.Reader) ([]byte, error) {
+	chunkID := make([]byte, 4)
+	bytesRead, err := r.Read(chunkID)
+	if err != nil {
+		return nil, err
+	}
+	if expected, got := 4, bytesRead; expected != got {
+		return nil, fmt.Errorf("expected to read %d bytes, actually read %d", expected, got)
+	}
+	return chunkID, nil
 }
 
 // readFormat reads the format chunk.
 // It also stores the formatting information as properties.
 func (w wav) readFormat(r io.Reader) error {
 	// Read the format identifier, should be "fmt ".
-	if err := w.readFormatID(r); err != nil {
+	if err := w.expectChunkID(r, "fmt "); err != nil {
 		return err
 	}
 
@@ -61,28 +70,30 @@ func (w wav) readFormat(r io.Reader) error {
 	}
 
 	// Read the number of channels.
-	if err := w.readNumChannels(r); err != nil {
+	if err := w.readInt16(r, "NumChannels"); err != nil {
 		return err
 	}
 
 	// Read sample rate.
-
-	return nil
-}
-
-// readFormatID reads the fmt chunk identifier.
-func (w wav) readFormatID(r io.Reader) error {
-	id := make([]byte, 4)
-	bytesRead, err := r.Read(id)
-	if err != nil {
+	if err := w.readInt32(r, "SampleRate"); err != nil {
 		return err
 	}
-	if expected, got := 4, bytesRead; expected != got {
-		return fmt.Errorf("expected to read %d bytes, actually read %d", expected, got)
+
+	// Read byte rate.
+	if err := w.readInt32(r, "ByteRate"); err != nil {
+		return err
 	}
-	if expected, got := "fmt ", string(id); expected != got {
-		return fmt.Errorf("expected format %s, got %s", expected, got)
+
+	// Read block align.
+	if err := w.readInt16(r, "BlockAlign"); err != nil {
+		return err
 	}
+
+	// Read bit rate.
+	if err := w.readInt16(r, "BitRate"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -112,14 +123,23 @@ func (w wav) readAudioFormat(r io.Reader) error {
 	return nil
 }
 
-// readNumChannels reads the number of channels from the fmt chunk
-// and stores it as the "NumChannels" property.
-func (w wav) readNumChannels(r io.Reader) error {
-	var numChannels int16
-	if err := binary.Read(r, binary.LittleEndian, &numChannels); err != nil {
+// readInt16 reads an int16 from an io.Reader and stores it as a property.
+func (w wav) readInt16(r io.Reader, prop string) error {
+	var val int16
+	if err := binary.Read(r, binary.LittleEndian, &val); err != nil {
 		return err
 	}
-	w.store["NumChannels"] = strconv.FormatInt(int64(numChannels), 10)
+	w.store[prop] = strconv.FormatInt(int64(val), 10)
+	return nil
+}
+
+// readInt32 reads an int32 from an io.Reader and stores it as a property.
+func (w wav) readInt32(r io.Reader, prop string) error {
+	var val int32
+	if err := binary.Read(r, binary.LittleEndian, &val); err != nil {
+		return err
+	}
+	w.store[prop] = strconv.Itoa(int(val))
 	return nil
 }
 
@@ -137,16 +157,14 @@ func newWav(r io.Reader) (Getter, error) {
 	}
 
 	// Sniff the format.
-	if err := getter.sniffFormat(r); err != nil {
+	if err := getter.expectChunkID(r, "WAVE"); err != nil {
+		return nil, err
+	}
+
+	// Read the fmt chunk.
+	if err := getter.readFormat(r); err != nil {
 		return nil, err
 	}
 
 	return getter, nil
-}
-
-// chunk is a RIFF chunk.
-type chunk struct {
-	ID   [4]byte
-	Len  [4]byte
-	Data []byte
 }
